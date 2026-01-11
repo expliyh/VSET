@@ -27,10 +27,13 @@ export function buildTaskConfig(): TaskConfig {
   const {
     useVfi,
     useFreezeRepair,
+    FreezeDetectExactValue,
     FreezeDetectNoiseValue,
     FreezeDetectMinFramesValue,
     FreezeDetectMaxFramesValue,
   } = storeToRefs(VfiSettingStore)
+
+  const freezeExact = FreezeDetectExactValue.value
 
   return {
     fileList: fileListNames,
@@ -43,7 +46,8 @@ export function buildTaskConfig(): TaskConfig {
     isSaveSubtitle: isSaveSubtitle.value,
     freezeRepair: {
       enabled: Boolean(useVfi.value && useFreezeRepair.value),
-      noise: FreezeDetectNoiseValue.value,
+      exact: freezeExact,
+      noise: freezeExact ? 0 : FreezeDetectNoiseValue.value,
       minFrames: FreezeDetectMinFramesValue.value,
       maxFrames: FreezeDetectMaxFramesValue.value,
     },

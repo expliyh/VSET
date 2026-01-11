@@ -9,6 +9,7 @@ export interface TaskConfig {
   isSaveSubtitle: boolean
   freezeRepair?: {
     enabled: boolean
+    exact: boolean
     noise: number
     minFrames: number
     maxFrames: number

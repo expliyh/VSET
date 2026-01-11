@@ -12,12 +12,9 @@ export interface FreezeDetectOptions {
   minFrames: number
   /**
    * Maximum length of a freeze segment (in frames). Longer freezes are ignored.
+   * Set to 0 (or negative) to disable the upper limit.
    */
   maxFrames: number
-  /**
-   * Hard cap to avoid generating too many repair segments.
-   */
-  maxSegments?: number
 }
 
 export function parseFps(value: string | undefined): number | null {
@@ -73,8 +70,9 @@ export async function detectFreezeRanges(params: {
     return []
 
   const minFrames = Math.max(1, Math.floor(options.minFrames))
-  const maxFrames = Math.max(minFrames, Math.floor(options.maxFrames))
-  const maxSegments = options.maxSegments && options.maxSegments > 0 ? Math.floor(options.maxSegments) : undefined
+  const maxFrames = Math.floor(options.maxFrames) <= 0
+    ? null
+    : Math.max(minFrames, Math.floor(options.maxFrames))
 
   // freezedetect expects seconds. A freeze of N frames roughly spans N/fps seconds (CFR assumption).
   const minDurationSec = minFrames / safeFps
@@ -150,18 +148,140 @@ export async function detectFreezeRanges(params: {
         const len = e - s + 1
         if (len < minFrames)
           continue
-        if (len > maxFrames)
+        if (maxFrames !== null && len > maxFrames)
           continue
 
         rawRanges.push([s, e])
       }
 
-      let merged = mergeRanges(rawRanges)
-      if (maxSegments && merged.length > maxSegments) {
-        merged = merged.slice(0, maxSegments)
-      }
-      resolve(merged)
+      resolve(mergeRanges(rawRanges))
     })
   })
 }
 
+function extractFrameHashFromFramemd5Line(line: string): string | null {
+  if (!line || line.startsWith('#'))
+    return null
+
+  const parts = line.split(',').map(p => p.trim())
+  if (parts.length < 2)
+    return null
+
+  const last = parts.at(-1)
+  if (!last)
+    return null
+
+  const raw = last.includes('=') ? last.split('=').at(-1)! : last
+  const normalized = raw.trim().toLowerCase()
+  return normalized ? normalized : null
+}
+
+export async function detectExactDuplicateRanges(params: {
+  ffmpegPath: string
+  videoPath: string
+  options: Pick<FreezeDetectOptions, 'minFrames' | 'maxFrames'>
+  onLine?: (line: string) => void
+}): Promise<Array<[number, number]>> {
+  const { ffmpegPath, videoPath, options, onLine } = params
+
+  const minFrames = Math.max(1, Math.floor(options.minFrames))
+  const maxFrames = Math.floor(options.maxFrames) <= 0
+    ? null
+    : Math.max(minFrames, Math.floor(options.maxFrames))
+
+  const args = [
+    '-hide_banner',
+    '-nostats',
+    '-loglevel',
+    'error',
+    '-vsync',
+    '0',
+    '-i',
+    videoPath,
+    '-an',
+    '-map',
+    '0:v:0',
+    '-f',
+    'framemd5',
+    '-',
+  ]
+
+  return await new Promise<Array<[number, number]>>((resolve, reject) => {
+    const proc = spawn(ffmpegPath, args, { windowsHide: true })
+
+    const rawRanges: Array<[number, number]> = []
+    let frameIndex = 0
+    let previousHash: string | null = null
+
+    let runStart: number | null = null
+    let runLength = 0
+
+    const finalizeRun = () => {
+      if (runStart === null)
+        return
+      const runEnd = runStart + runLength - 1
+      // Replace duplicated frames only (keep the first frame of the repeated run).
+      const start = runStart + 1
+      const end = runEnd
+      const len = end - start + 1
+      if (len >= minFrames && (maxFrames === null || len <= maxFrames)) {
+        rawRanges.push([start, end])
+      }
+      runStart = null
+      runLength = 0
+    }
+
+    let buffer = ''
+    proc.stdout.on('data', (chunk) => {
+      buffer += chunk.toString()
+      while (true) {
+        const idx = buffer.indexOf('\n')
+        if (idx === -1)
+          break
+        const line = buffer.slice(0, idx).trimEnd()
+        buffer = buffer.slice(idx + 1)
+        onLine?.(line)
+
+        const hash = extractFrameHashFromFramemd5Line(line)
+        if (!hash)
+          continue
+
+        if (previousHash !== null && hash === previousHash) {
+          if (runStart === null) {
+            runStart = frameIndex - 1
+            runLength = 2
+          }
+          else {
+            runLength += 1
+          }
+        }
+        else {
+          finalizeRun()
+        }
+
+        previousHash = hash
+        frameIndex += 1
+      }
+    })
+
+    proc.stderr.on('data', (chunk) => {
+      onLine?.(chunk.toString().trimEnd())
+    })
+
+    proc.on('error', err => reject(err))
+    proc.on('close', (code) => {
+      if (code !== 0 && frameIndex === 0) {
+        reject(new Error(`ffmpeg framemd5 exited with code ${code}`))
+        return
+      }
+
+      finalizeRun()
+
+      const totalFrames = frameIndex
+      // Need a following frame (end+1) to interpolate towards.
+      const filtered = rawRanges.filter(([, end]) => end < totalFrames - 1)
+
+      resolve(mergeRanges(filtered))
+    })
+  })
+}

@@ -364,6 +364,16 @@ GitHub: https://github.com/EutropicAI/VSET
       const model = model_switch[RifeModelValue.value] || 40
       const EnsembleBool = RifeEnsembleValue.value ? 'True' : 'False'
 
+      // vsmlrt RIFE tiling requires tile sizes divisible by 64 (after scale).
+      let tilesize_requirement = 64
+      if (RifeModelValue.value === 'v4_25_lite') {
+        tilesize_requirement = 128
+      }
+      if (RifeModelValue.value === 'v4_25_heavy' || RifeModelValue.value === 'v4_26_heavy'
+        || RifeModelValue.value === 'v4_26') {
+        tilesize_requirement = 64
+      }
+
       vpyContent += 'from fractions import Fraction\n'
       vpyContent += `use_freeze_repair = ${useFreezeRepair.value ? 'True' : 'False'}\n`
       vpyContent += `target_fps = Fraction(${RifeMultiValue.value}, 1)\n`
@@ -397,6 +407,13 @@ GitHub: https://github.com/EutropicAI/VSET
       vpyContent += '    device_vfi.fp16=True\n'
       vpyContent += `    device_vfi.num_streams=${Vfi_numstreams.value}\n`
 
+      // Pad once for RIFE tile requirements (also used by freeze-repair).
+      vpyContent += `    Borders = max(1, int(round(${tilesize_requirement} / ${RifeScaleValue.value})))\n`
+      vpyContent += '    pad_h = (Borders - (res.height % Borders)) % Borders\n'
+      vpyContent += '    pad_w = (Borders - (res.width  % Borders)) % Borders\n'
+      vpyContent += '    if pad_w or pad_h:\n'
+      vpyContent += '        res = core.std.AddBorders(clip=res, right=pad_w, bottom=pad_h)\n'
+
       // 1) Freeze / stutter repair (replace duplicated frames with RIFE intermediates)
       if (useFreezeRepair.value === true) {
         vpyContent += '    import os, json\n'
@@ -409,25 +426,35 @@ GitHub: https://github.com/EutropicAI/VSET
         vpyContent += '    except Exception:\n'
         vpyContent += '        freeze_ranges = []\n'
         vpyContent += '    def _vset_freeze_repair(clip, ranges):\n'
-        vpyContent += '        out = clip\n'
+        vpyContent += '        try:\n'
+        vpyContent += '            ranges = sorted(ranges, key=lambda r: int(r[0]))\n'
+        vpyContent += '        except Exception:\n'
+        vpyContent += '            pass\n'
+        vpyContent += '        parts = []\n'
+        vpyContent += '        cursor = 0\n'
+        vpyContent += '        n = clip.num_frames\n'
         vpyContent += '        for r in ranges:\n'
         vpyContent += '            try:\n'
         vpyContent += '                s = int(r[0]); e = int(r[1])\n'
         vpyContent += '            except Exception:\n'
         vpyContent += '                continue\n'
-        vpyContent += '            if s < 1 or e < s or e >= out.num_frames - 1:\n'
+        vpyContent += '            if s < 1 or e < s or e >= n - 1:\n'
+        vpyContent += '                continue\n'
+        vpyContent += '            if s <= cursor:\n'
         vpyContent += '                continue\n'
         vpyContent += '            L = e - s + 1\n'
-        vpyContent += '            pre = core.std.Trim(out, 0, s - 1)\n'
-        vpyContent += '            post = core.std.Trim(out, e + 1, out.num_frames - 1)\n'
-        vpyContent += '            a = core.std.Trim(out, s - 1, s - 1)\n'
-        vpyContent += '            b = core.std.Trim(out, e + 1, e + 1)\n'
+        vpyContent += '            if cursor <= s - 1:\n'
+        vpyContent += '                parts.append(core.std.Trim(clip, cursor, s - 1))\n'
+        vpyContent += '            a = core.std.Trim(clip, s - 1, s - 1)\n'
+        vpyContent += '            b = core.std.Trim(clip, e + 1, e + 1)\n'
         vpyContent += '            ab = core.std.Splice([a, b], mismatch=True)\n'
-        vpyContent += '            ab = core.std.AssumeFPS(ab, fpsnum=out.fps_num, fpsden=out.fps_den * (L + 1))\n'
+        vpyContent += '            ab = core.std.AssumeFPS(ab, fpsnum=clip.fps_num, fpsden=clip.fps_den * (L + 1))\n'
         vpyContent += `            v = RIFE(ab, scale=${RifeScaleValue.value},model=${model},ensemble=${EnsembleBool},multi=Fraction(L + 1, 1), backend=device_vfi)\n`
-        vpyContent += '            mid = core.std.Trim(v, 1, L)\n'
-        vpyContent += '            out = core.std.Splice([pre, mid, post], mismatch=True)\n'
-        vpyContent += '        return out\n'
+        vpyContent += '            parts.append(core.std.Trim(v, 1, L))\n'
+        vpyContent += '            cursor = e + 1\n'
+        vpyContent += '        if cursor <= n - 1:\n'
+        vpyContent += '            parts.append(core.std.Trim(clip, cursor, n - 1))\n'
+        vpyContent += '        return core.std.Splice(parts, mismatch=True) if parts else clip\n'
         vpyContent += '    if freeze_ranges:\n'
         vpyContent += '        res = _vset_freeze_repair(res, freeze_ranges)\n'
       }
@@ -435,21 +462,11 @@ GitHub: https://github.com/EutropicAI/VSET
       // 2) Normal VFI: only when target_fps > src_fps
       vpyContent += '    if src_fps and target_fps > src_fps:\n'
       vpyContent += `        res = core.misc.SCDetect(res,threshold=${RifeDetectionValue.value})\n`
-      let tilesize_requirement = 32
-      if (RifeModelValue.value === 'v4_25_lite') {
-        tilesize_requirement = 128
-      }
-      if (RifeModelValue.value === 'v4_25_heavy' || RifeModelValue.value === 'v4_26_heavy'
-        || RifeModelValue.value === 'v4_26') {
-        tilesize_requirement = 64
-      }
-      vpyContent += `        Borders=${tilesize_requirement} / ${RifeScaleValue.value}\n`
-      vpyContent += '        res_height = (Borders - res.height % Borders) \n'
-      vpyContent += '        res_width  = (Borders - res.width  % Borders) \n'
-      vpyContent += '        res = core.std.AddBorders(clip=res, right=res_width, bottom=res_height)\n'
       vpyContent += '        multi = target_fps / src_fps\n'
       vpyContent += `        res = RIFE(res, scale=${RifeScaleValue.value},model=${model},ensemble=${EnsembleBool},multi=multi, backend=device_vfi)\n`
-      vpyContent += '        res = core.std.Crop(clip=res, right=res_width, bottom=res_height)\n'
+
+      vpyContent += '    if pad_w or pad_h:\n'
+      vpyContent += '        res = core.std.Crop(clip=res, right=pad_w, bottom=pad_h)\n'
     }
   }
 

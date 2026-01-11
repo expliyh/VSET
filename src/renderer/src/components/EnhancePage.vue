@@ -54,6 +54,7 @@ const {
   useVfi,
   VfiMethodValue,
   useFreezeRepair,
+  FreezeDetectExactValue,
   FreezeDetectNoiseValue,
   FreezeDetectMinFramesValue,
   FreezeDetectMaxFramesValue,
@@ -574,6 +575,16 @@ function ShowVfiExtra(): void {
             </div>
 
             <div v-if="useFreezeRepair" class="slider-demo-block">
+              <span class="demonstration">Freeze exact only</span>
+              <el-switch
+                v-model="FreezeDetectExactValue"
+                size="large"
+                active-text="ON"
+                inactive-text="OFF"
+              />
+            </div>
+
+            <div v-if="useFreezeRepair && !FreezeDetectExactValue" class="slider-demo-block">
               <span class="demonstration">Freeze detect noise</span>
               <el-slider
                 v-model="FreezeDetectNoiseValue"
@@ -589,7 +600,7 @@ function ShowVfiExtra(): void {
               <span class="demonstration">Freeze min frames</span>
               <el-slider
                 v-model="FreezeDetectMinFramesValue"
-                :min="2"
+                :min="1"
                 :max="10"
                 :step="1"
                 show-input
@@ -598,10 +609,10 @@ function ShowVfiExtra(): void {
             </div>
 
             <div v-if="useFreezeRepair" class="slider-demo-block">
-              <span class="demonstration">Freeze max frames</span>
+              <span class="demonstration">Freeze max frames (0 = no limit)</span>
               <el-slider
                 v-model="FreezeDetectMaxFramesValue"
-                :min="2"
+                :min="0"
                 :max="60"
                 :step="1"
                 show-input

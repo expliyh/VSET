@@ -9,7 +9,7 @@ import { IpcChannelOn } from '@shared/constant/ipc'
 import { MagicStr } from '@shared/constant/magicStr'
 import iconv from 'iconv-lite'
 import { addProcess, removeProcess } from './childProcessManager'
-import { detectFreezeRanges, parseFps } from './freezeDetect'
+import { detectExactDuplicateRanges, detectFreezeRanges, parseFps } from './freezeDetect'
 import { getCorePath, getExecPath, getGenVpyPath } from './getCorePath'
 import { writeVpyFile } from './writeFile'
 
@@ -95,21 +95,37 @@ export async function runCommand(event: IpcMainEvent, taskConfig: TaskConfig): P
       const vpyPath = getGenVpyPath(taskConfig, baseName)
 
       // Optional: detect frozen (duplicated) frame segments for local RIFE repair.
-      if (taskConfig.freezeRepair?.enabled && inputFps) {
+      if (taskConfig.freezeRepair?.enabled) {
         const freezeJsonPath = path.join(taskConfig.outputFolder, `${baseName}.freeze.json`)
         try {
           event.sender.send(IpcChannelOn.FFMPEG_OUTPUT, '======= Freeze detect =======\n')
-          const ranges = await detectFreezeRanges({
-            ffmpegPath,
-            videoPath: video,
-            fps: inputFps,
-            options: {
-              noise: taskConfig.freezeRepair.noise,
-              minFrames: taskConfig.freezeRepair.minFrames,
-              maxFrames: taskConfig.freezeRepair.maxFrames,
-              maxSegments: 200,
-            },
-          })
+          let ranges: Array<[number, number]> = []
+          if (taskConfig.freezeRepair.exact) {
+            event.sender.send(IpcChannelOn.FFMPEG_OUTPUT, 'freeze mode: exact\n')
+            ranges = await detectExactDuplicateRanges({
+              ffmpegPath,
+              videoPath: video,
+              options: {
+                minFrames: taskConfig.freezeRepair.minFrames,
+                maxFrames: taskConfig.freezeRepair.maxFrames,
+              },
+            })
+          }
+          else if (inputFps) {
+            ranges = await detectFreezeRanges({
+              ffmpegPath,
+              videoPath: video,
+              fps: inputFps,
+              options: {
+                noise: taskConfig.freezeRepair.noise,
+                minFrames: taskConfig.freezeRepair.minFrames,
+                maxFrames: taskConfig.freezeRepair.maxFrames,
+              },
+            })
+          }
+          else {
+            event.sender.send(IpcChannelOn.FFMPEG_OUTPUT, 'freeze detect skipped: unknown input fps\n')
+          }
           writeFileSync(freezeJsonPath, JSON.stringify(ranges), 'utf8')
           event.sender.send(IpcChannelOn.FFMPEG_OUTPUT, `freeze segments: ${ranges.length}\n`)
           if (ranges.length > 0)

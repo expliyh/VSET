@@ -7,6 +7,7 @@ export default defineStore('VfiSettingConfig', () => {
 
   // Freeze / stutter repair (for duplicated frames)
   const useFreezeRepair = ref(false)
+  const FreezeDetectExactValue = ref(false)
   const FreezeDetectNoiseValue = ref(0.003)
   const FreezeDetectMinFramesValue = ref(2)
   const FreezeDetectMaxFramesValue = ref(8)
@@ -25,6 +26,7 @@ export default defineStore('VfiSettingConfig', () => {
     useVfi,
     VfiMethodValue,
     useFreezeRepair,
+    FreezeDetectExactValue,
     FreezeDetectNoiseValue,
     FreezeDetectMinFramesValue,
     FreezeDetectMaxFramesValue,
