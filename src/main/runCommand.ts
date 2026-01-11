@@ -2,12 +2,14 @@ import type { TaskConfig } from '@shared/type/taskConfig'
 import type { IpcMainEvent } from 'electron'
 import type { Buffer } from 'node:buffer'
 import { exec as execCallback, spawn } from 'node:child_process'
+import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { promisify } from 'node:util'
 import { IpcChannelOn } from '@shared/constant/ipc'
 import { MagicStr } from '@shared/constant/magicStr'
 import iconv from 'iconv-lite'
 import { addProcess, removeProcess } from './childProcessManager'
+import { detectFreezeRanges, parseFps } from './freezeDetect'
 import { getCorePath, getExecPath, getGenVpyPath } from './getCorePath'
 import { writeVpyFile } from './writeFile'
 
@@ -70,6 +72,7 @@ export async function runCommand(event: IpcMainEvent, taskConfig: TaskConfig): P
       const videoStream = allStreams.find((s: any) => s.codec_type === 'video')
       const hasAudio = allStreams.some((s: any) => s.codec_type === 'audio')
       const hasSubtitle = allStreams.some((s: any) => s.codec_type === 'subtitle')
+      const inputFps = parseFps(videoStream?.avg_frame_rate) ?? parseFps(videoStream?.r_frame_rate)
 
       if (videoStream) {
         const frameCount = videoStream.nb_frames || '未知'
@@ -90,6 +93,38 @@ export async function runCommand(event: IpcMainEvent, taskConfig: TaskConfig): P
       // 生成唯一 vpy 路径
       const baseName = path.basename(video, path.extname(video))
       const vpyPath = getGenVpyPath(taskConfig, baseName)
+
+      // Optional: detect frozen (duplicated) frame segments for local RIFE repair.
+      if (taskConfig.freezeRepair?.enabled && inputFps) {
+        const freezeJsonPath = path.join(taskConfig.outputFolder, `${baseName}.freeze.json`)
+        try {
+          event.sender.send(IpcChannelOn.FFMPEG_OUTPUT, '======= Freeze detect =======\n')
+          const ranges = await detectFreezeRanges({
+            ffmpegPath,
+            videoPath: video,
+            fps: inputFps,
+            options: {
+              noise: taskConfig.freezeRepair.noise,
+              minFrames: taskConfig.freezeRepair.minFrames,
+              maxFrames: taskConfig.freezeRepair.maxFrames,
+              maxSegments: 200,
+            },
+          })
+          writeFileSync(freezeJsonPath, JSON.stringify(ranges), 'utf8')
+          event.sender.send(IpcChannelOn.FFMPEG_OUTPUT, `freeze segments: ${ranges.length}\n`)
+          if (ranges.length > 0)
+            event.sender.send(IpcChannelOn.FFMPEG_OUTPUT, `freeze first: [${ranges[0][0]}, ${ranges[0][1]}]\n`)
+          event.sender.send(IpcChannelOn.FFMPEG_OUTPUT, `freeze json: ${freezeJsonPath}\n`)
+        }
+        catch (error) {
+          try {
+            writeFileSync(freezeJsonPath, '[]', 'utf8')
+          }
+          catch {}
+          const msg = error instanceof Error ? error.message : String(error)
+          event.sender.send(IpcChannelOn.FFMPEG_OUTPUT, `freeze detect failed, skip: ${msg}\n`)
+        }
+      }
       await writeVpyFile(null, vpyPath, vpyContent, video)
 
       // ========== 3. 获取输出视频信息 ==========

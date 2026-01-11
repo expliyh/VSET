@@ -7,4 +7,10 @@ export interface TaskConfig {
   ffmpegCMD: string[]
   isSaveAudio: boolean
   isSaveSubtitle: boolean
+  freezeRepair?: {
+    enabled: boolean
+    noise: number
+    minFrames: number
+    maxFrames: number
+  }
 }

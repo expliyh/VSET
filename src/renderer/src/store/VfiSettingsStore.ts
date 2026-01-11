@@ -5,6 +5,12 @@ export default defineStore('VfiSettingConfig', () => {
   const useVfi = ref(false)
   const VfiMethodValue = ref('Rife')
 
+  // Freeze / stutter repair (for duplicated frames)
+  const useFreezeRepair = ref(false)
+  const FreezeDetectNoiseValue = ref(0.003)
+  const FreezeDetectMinFramesValue = ref(2)
+  const FreezeDetectMaxFramesValue = ref(8)
+
   const RifeInferenceValue = ref('Cuda')
   const RifeModelValue = ref('v4_0')
   const RifeScaleValue = ref(1.0)
@@ -18,6 +24,10 @@ export default defineStore('VfiSettingConfig', () => {
   return {
     useVfi,
     VfiMethodValue,
+    useFreezeRepair,
+    FreezeDetectNoiseValue,
+    FreezeDetectMinFramesValue,
+    FreezeDetectMaxFramesValue,
     RifeInferenceValue,
     RifeModelValue,
     RifeScaleValue,

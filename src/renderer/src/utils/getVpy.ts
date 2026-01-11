@@ -32,6 +32,7 @@ export function buildVpyContent(): string {
   const {
     useVfi,
     VfiMethodValue,
+    useFreezeRepair,
     RifeInferenceValue,
     RifeModelValue,
     RifeScaleValue,
@@ -320,35 +321,8 @@ GitHub: https://github.com/EutropicAI/VSET
     }
   }
 
-  // 补帧
+  // 补帧 / 冻结帧修复
   if (useVfi.value === true) {
-    vpyContent += 'res = core.resize.Bicubic(clip=res,range=1,matrix_in_s="709",format=vs.RGB48)\n'
-    vpyContent += 'res=core.fmtc.bitdepth(res, bits=32)\n'
-
-    if (VfiMethodValue.value === 'Rife') {
-      if (RifeInferenceValue.value === 'Cuda') {
-        vpyContent += 'device_vfi=Backend.ORT_CUDA()\n'
-      }
-      if (RifeInferenceValue.value === 'TensorRt') {
-        vpyContent += 'device_vfi=Backend.TRT()\n'
-        vpyContent += `device_vfi.use_cuda_graph = ${String(Vfi_cudagraph.value)[0].toUpperCase() + String(Vfi_cudagraph.value).slice(1)}\n`
-      }
-      if (RifeInferenceValue.value === 'NCNN') {
-        vpyContent += 'device_vfi=Backend.NCNN_VK()\n'
-      }
-      if (RifeInferenceValue.value === 'DML') {
-        vpyContent += 'device_vfi=Backend.ORT_DML()\n'
-      }
-      if (RifeInferenceValue.value === 'MIGX') {
-        vpyContent += 'device_vfi=Backend.MIGX()\n'
-      }
-    }
-
-    vpyContent += 'device_vfi.device_id=0\n'
-    vpyContent += 'device_vfi.fp16=True\n'
-    vpyContent += `device_vfi.num_streams=${Vfi_numstreams.value}\n`
-    vpyContent += 'from fractions import Fraction\n'
-
     if (VfiMethodValue.value === 'Rife') {
       const model_switch = {
         v4_0: 40,
@@ -389,7 +363,78 @@ GitHub: https://github.com/EutropicAI/VSET
       }
       const model = model_switch[RifeModelValue.value] || 40
       const EnsembleBool = RifeEnsembleValue.value ? 'True' : 'False'
-      vpyContent += `res = core.misc.SCDetect(res,threshold=${RifeDetectionValue.value})\n`
+
+      vpyContent += 'from fractions import Fraction\n'
+      vpyContent += `use_freeze_repair = ${useFreezeRepair.value ? 'True' : 'False'}\n`
+      vpyContent += `target_fps = Fraction(${RifeMultiValue.value}, 1)\n`
+      vpyContent += 'src_fps = Fraction(res.fps_num, res.fps_den) if res.fps_num and res.fps_den else Fraction(0, 1)\n'
+      vpyContent += 'need_vfi = use_freeze_repair or (src_fps and target_fps > src_fps)\n'
+      vpyContent += 'if need_vfi:\n'
+
+      // Convert only when needed.
+      vpyContent += '    res = core.resize.Bicubic(clip=res,range=1,matrix_in_s="709",format=vs.RGB48)\n'
+      vpyContent += '    res=core.fmtc.bitdepth(res, bits=32)\n'
+
+      // VFI backend
+      if (RifeInferenceValue.value === 'Cuda') {
+        vpyContent += '    device_vfi=Backend.ORT_CUDA()\n'
+      }
+      if (RifeInferenceValue.value === 'TensorRt') {
+        vpyContent += '    device_vfi=Backend.TRT()\n'
+        vpyContent += `    device_vfi.use_cuda_graph = ${String(Vfi_cudagraph.value)[0].toUpperCase() + String(Vfi_cudagraph.value).slice(1)}\n`
+      }
+      if (RifeInferenceValue.value === 'NCNN') {
+        vpyContent += '    device_vfi=Backend.NCNN_VK()\n'
+      }
+      if (RifeInferenceValue.value === 'DML') {
+        vpyContent += '    device_vfi=Backend.ORT_DML()\n'
+      }
+      if (RifeInferenceValue.value === 'MIGX') {
+        vpyContent += '    device_vfi=Backend.MIGX()\n'
+      }
+
+      vpyContent += '    device_vfi.device_id=0\n'
+      vpyContent += '    device_vfi.fp16=True\n'
+      vpyContent += `    device_vfi.num_streams=${Vfi_numstreams.value}\n`
+
+      // 1) Freeze / stutter repair (replace duplicated frames with RIFE intermediates)
+      if (useFreezeRepair.value === true) {
+        vpyContent += '    import os, json\n'
+        vpyContent += '    freeze_ranges = []\n'
+        vpyContent += '    try:\n'
+        vpyContent += '        _freeze_path = os.path.splitext(__file__)[0] + ".freeze.json"\n'
+        vpyContent += '        if os.path.exists(_freeze_path):\n'
+        vpyContent += '            with open(_freeze_path, "r", encoding="utf-8") as f:\n'
+        vpyContent += '                freeze_ranges = json.load(f)\n'
+        vpyContent += '    except Exception:\n'
+        vpyContent += '        freeze_ranges = []\n'
+        vpyContent += '    def _vset_freeze_repair(clip, ranges):\n'
+        vpyContent += '        out = clip\n'
+        vpyContent += '        for r in ranges:\n'
+        vpyContent += '            try:\n'
+        vpyContent += '                s = int(r[0]); e = int(r[1])\n'
+        vpyContent += '            except Exception:\n'
+        vpyContent += '                continue\n'
+        vpyContent += '            if s < 1 or e < s or e >= out.num_frames - 1:\n'
+        vpyContent += '                continue\n'
+        vpyContent += '            L = e - s + 1\n'
+        vpyContent += '            pre = core.std.Trim(out, 0, s - 1)\n'
+        vpyContent += '            post = core.std.Trim(out, e + 1, out.num_frames - 1)\n'
+        vpyContent += '            a = core.std.Trim(out, s - 1, s - 1)\n'
+        vpyContent += '            b = core.std.Trim(out, e + 1, e + 1)\n'
+        vpyContent += '            ab = core.std.Splice([a, b], mismatch=True)\n'
+        vpyContent += '            ab = core.std.AssumeFPS(ab, fpsnum=out.fps_num, fpsden=out.fps_den * (L + 1))\n'
+        vpyContent += `            v = RIFE(ab, scale=${RifeScaleValue.value},model=${model},ensemble=${EnsembleBool},multi=Fraction(L + 1, 1), backend=device_vfi)\n`
+        vpyContent += '            mid = core.std.Trim(v, 1, L)\n'
+        vpyContent += '            out = core.std.Splice([pre, mid, post], mismatch=True)\n'
+        vpyContent += '        return out\n'
+        vpyContent += '    if freeze_ranges:\n'
+        vpyContent += '        res = _vset_freeze_repair(res, freeze_ranges)\n'
+      }
+
+      // 2) Normal VFI: only when target_fps > src_fps
+      vpyContent += '    if src_fps and target_fps > src_fps:\n'
+      vpyContent += `        res = core.misc.SCDetect(res,threshold=${RifeDetectionValue.value})\n`
       let tilesize_requirement = 32
       if (RifeModelValue.value === 'v4_25_lite') {
         tilesize_requirement = 128
@@ -398,15 +443,13 @@ GitHub: https://github.com/EutropicAI/VSET
         || RifeModelValue.value === 'v4_26') {
         tilesize_requirement = 64
       }
-      vpyContent += `Borders=${tilesize_requirement} / ${RifeScaleValue.value}\n`
-      vpyContent += 'res_height = (Borders - res.height % Borders) \n'
-      vpyContent += 'res_width  = (Borders - res.width  % Borders) \n'
-      vpyContent += 'res = core.std.AddBorders(clip=res, right=res_width, bottom=res_height)\n'
-
-      vpyContent += `res = RIFE(res, scale=${RifeScaleValue.value},model=${model},ensemble=${EnsembleBool
-      },multi=Fraction(${RifeMultiValue.value},res.fps)` + `, backend=device_vfi)\n`
-
-      vpyContent += 'res = core.std.Crop(clip=res, right=res_width, bottom=res_height)\n'
+      vpyContent += `        Borders=${tilesize_requirement} / ${RifeScaleValue.value}\n`
+      vpyContent += '        res_height = (Borders - res.height % Borders) \n'
+      vpyContent += '        res_width  = (Borders - res.width  % Borders) \n'
+      vpyContent += '        res = core.std.AddBorders(clip=res, right=res_width, bottom=res_height)\n'
+      vpyContent += '        multi = target_fps / src_fps\n'
+      vpyContent += `        res = RIFE(res, scale=${RifeScaleValue.value},model=${model},ensemble=${EnsembleBool},multi=multi, backend=device_vfi)\n`
+      vpyContent += '        res = core.std.Crop(clip=res, right=res_width, bottom=res_height)\n'
     }
   }
 

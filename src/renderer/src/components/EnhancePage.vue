@@ -53,6 +53,10 @@ const {
 const {
   useVfi,
   VfiMethodValue,
+  useFreezeRepair,
+  FreezeDetectNoiseValue,
+  FreezeDetectMinFramesValue,
+  FreezeDetectMaxFramesValue,
   RifeInferenceValue,
   RifeModelValue,
   RifeScaleValue,
@@ -557,6 +561,52 @@ function ShowVfiExtra(): void {
                   关闭
                 </el-radio-button>
               </el-radio-group>
+            </div>
+
+            <div class="slider-demo-block">
+              <span class="demonstration">Freeze repair</span>
+              <el-switch
+                v-model="useFreezeRepair"
+                size="large"
+                active-text="ON"
+                inactive-text="OFF"
+              />
+            </div>
+
+            <div v-if="useFreezeRepair" class="slider-demo-block">
+              <span class="demonstration">Freeze detect noise</span>
+              <el-slider
+                v-model="FreezeDetectNoiseValue"
+                :min="0"
+                :max="0.02"
+                :step="0.0005"
+                show-input
+                style="max-width: 500px;"
+              />
+            </div>
+
+            <div v-if="useFreezeRepair" class="slider-demo-block">
+              <span class="demonstration">Freeze min frames</span>
+              <el-slider
+                v-model="FreezeDetectMinFramesValue"
+                :min="2"
+                :max="10"
+                :step="1"
+                show-input
+                style="max-width: 500px;"
+              />
+            </div>
+
+            <div v-if="useFreezeRepair" class="slider-demo-block">
+              <span class="demonstration">Freeze max frames</span>
+              <el-slider
+                v-model="FreezeDetectMaxFramesValue"
+                :min="2"
+                :max="60"
+                :step="1"
+                show-input
+                style="max-width: 500px;"
+              />
             </div>
 
             <div class="flex-container-extra">
