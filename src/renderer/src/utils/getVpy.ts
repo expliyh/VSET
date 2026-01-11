@@ -376,8 +376,9 @@ GitHub: https://github.com/EutropicAI/VSET
 
       vpyContent += 'from fractions import Fraction\n'
       vpyContent += `use_freeze_repair = ${useFreezeRepair.value ? 'True' : 'False'}\n`
-      vpyContent += `target_fps = Fraction(${RifeMultiValue.value}, 1)\n`
+      vpyContent += `user_target_fps = Fraction(${RifeMultiValue.value}, 1)\n`
       vpyContent += 'src_fps = Fraction(res.fps_num, res.fps_den) if res.fps_num and res.fps_den else Fraction(0, 1)\n'
+      vpyContent += 'target_fps = (src_fps if (use_freeze_repair and src_fps) else user_target_fps)\n'
       vpyContent += 'need_vfi = use_freeze_repair or (src_fps and target_fps > src_fps)\n'
       vpyContent += 'if need_vfi:\n'
 
@@ -481,10 +482,13 @@ GitHub: https://github.com/EutropicAI/VSET
       }
 
       // 2) Normal VFI: only when target_fps > src_fps
-      vpyContent += '    if src_fps and target_fps > src_fps:\n'
+      vpyContent += '    if (not use_freeze_repair) and src_fps and target_fps > src_fps:\n'
       vpyContent += `        res = core.misc.SCDetect(res,threshold=${RifeDetectionValue.value})\n`
       vpyContent += '        multi = target_fps / src_fps\n'
       vpyContent += `        res = RIFE(res, scale=${RifeScaleValue.value},model=${model},ensemble=${EnsembleBool},multi=multi, backend=device_vfi)\n`
+      vpyContent += '        res = core.std.AssumeFPS(res, fpsnum=target_fps.numerator, fpsden=target_fps.denominator)\n'
+      vpyContent += '    if use_freeze_repair and src_fps:\n'
+      vpyContent += '        res = core.std.AssumeFPS(res, fpsnum=src_fps.numerator, fpsden=src_fps.denominator)\n'
 
       vpyContent += '    if pad_w or pad_h:\n'
       vpyContent += '        res = core.std.Crop(clip=res, right=pad_w, bottom=pad_h)\n'
